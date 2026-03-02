@@ -15,31 +15,61 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
+# ─── Определение дистрибутива ────────────────────────────────────────────────
+if [[ -f /etc/os-release ]]; then
+  . /etc/os-release
+  DISTRO_ID="${ID}"          # ubuntu | debian
+  DISTRO_CODENAME="${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
+else
+  echo -e "${RED}Не удалось определить дистрибутив (/etc/os-release не найден).${NC}"
+  exit 1
+fi
+
+case "$DISTRO_ID" in
+  ubuntu|debian) ;;
+  *)
+    echo -e "${RED}Неподдерживаемый дистрибутив: ${DISTRO_ID}. Скрипт поддерживает только Ubuntu и Debian.${NC}"
+    exit 1
+    ;;
+esac
+
+echo -e "${CYAN}Дистрибутив: ${DISTRO_ID} ${DISTRO_CODENAME}${NC}"
+
+# ─── 1) Обновление системы ───────────────────────────────────────────────────
 echo -e "${CYAN}1) Обновление системы и базовых пакетов...${NC}"
 apt update -y
 apt upgrade -y
-
 apt install -y ca-certificates curl gnupg lsb-release
 
+# ─── 2) Установка Docker ─────────────────────────────────────────────────────
 if ! command -v docker >/dev/null 2>&1; then
   echo -e "${CYAN}2) Установка Docker Engine из официального репозитория...${NC}"
 
   install -m 0755 -d /etc/apt/keyrings
 
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  # GPG-ключ и репозиторий зависят от дистрибутива
+  case "$DISTRO_ID" in
+    ubuntu)
+      DOCKER_GPG_URL="https://download.docker.com/linux/ubuntu/gpg"
+      DOCKER_REPO_URL="https://download.docker.com/linux/ubuntu"
+      ;;
+    debian)
+      DOCKER_GPG_URL="https://download.docker.com/linux/debian/gpg"
+      DOCKER_REPO_URL="https://download.docker.com/linux/debian"
+      ;;
+  esac
+
+  curl -fsSL "${DOCKER_GPG_URL}" \
     | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 
   chmod a+r /etc/apt/keyrings/docker.gpg
 
-  UBUNTU_CODENAME=$( . /etc/os-release && echo "$VERSION_CODENAME" )
-
   echo \
     "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-    https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable" \
+    ${DOCKER_REPO_URL} ${DISTRO_CODENAME} stable" \
     > /etc/apt/sources.list.d/docker.list
 
   apt update -y
-
   apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   systemctl enable docker
@@ -50,10 +80,12 @@ else
   echo -e "${GREEN}Docker уже установлен, пропускаю установку.${NC}"
 fi
 
+# ─── Проверка версий ─────────────────────────────────────────────────────────
 echo -e "${CYAN}Проверка версий Docker и docker compose...${NC}"
 docker --version || { echo -e "${RED}docker не найден в PATH.${NC}"; exit 1; }
 docker compose version || { echo -e "${RED}docker compose plugin не установлен.${NC}"; exit 1; }
 
+# ─── 3) Директория проекта ───────────────────────────────────────────────────
 echo
 read -rp "Путь к директории проекта [по умолчанию /opt/remnanode]: " PROJECT_DIR
 PROJECT_DIR=${PROJECT_DIR:-/opt/remnanode}
@@ -97,6 +129,7 @@ if [[ "$NEED_NEW_COMPOSE" == "1" ]]; then
   echo -e "${GREEN}Файл ${COMPOSE_FILE} создан/перезаписан.${NC}"
 fi
 
+# ─── 4) Просмотр и запуск ────────────────────────────────────────────────────
 echo
 echo -e "${CYAN}Текущий ${COMPOSE_FILE}:${NC}"
 echo "----------------------------------------"
